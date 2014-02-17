@@ -1,0 +1,1496 @@
+\documentclass{article}
+<<setup, echo=FALSE, cache=FALSE>>=
+## numbers >= 10^5 will be denoted in scientific notation,
+## and rounded to 2 digits
+options(scipen = 3, digits = 2)
+@
+
+<<load packages, include=FALSE>>=
+require(effects)
+require(foreign)
+require(reshape)
+require(stringr)
+require(car)
+require(ggplot2)
+require(xtable)
+require(ggmap)
+require(gridExtra)
+require(reshape2)
+require(MplusAutomation)
+@
+
+<<working directory, include=FALSE>>=
+setwd("X:\\Ond\\Arbeid\\GGD-vragenlijsten JGZ\\")
+wd <- getwd()
+@
+
+<<functions and defaults, include=FALSE>>=
+# # Functions
+source(paste(wd,"functies.R",sep="\\"))
+
+# # Defaults
+placement="tb"
+float_env="table*"
+
+meansd <- function(x,narm=TRUE, digM=2,digSD=digM){
+    a <- mean(x,na.rm=narm)
+    b <- sd(x,na.rm=narm)
+    sp_fun <- paste0("%1$1.",digM,"f (%2$1.",digSD,"f)")
+    sprintf(sp_fun,a,b)
+  }
+
+cohens_d <- function(x, y) {
+    lx <- length(x)- 1
+    ly <- length(y)- 1
+    md  <- abs(mean(x,na.rm=T) - mean(y,na.rm=T))        ## mean difference (numerator)
+    csd <- lx * var(x,na.rm=T) + ly * var(y,na.rm=T)
+    csd <- csd/(lx + ly)
+    csd <- sqrt(csd)                     ## common sd computation
+
+    cd  <- md/csd                        ## cohen's d
+    b <- t.test(x,y)$p.value
+    res <- paste(sprintf("%.2f",cd), if(b<.05) "*" else "" ,sep="")
+    paste(gsub(pattern="0.",replacement=".",x=res,fixed=TRUE))
+}
+
+cohens_aov <- function(a, b, var) {
+    x  <- subset(sdq_JMVO, group == a)[,var]
+    y  <- subset(sdq_JMVO, group == b)[,var]
+    lx <- length(x)- 1
+    ly <- length(y)- 1
+    md  <- abs(mar_aov$fit[mar_aov$x==a] - mar_aov$fit[mar_aov$x==b])        ## mean difference (numerator)
+    csd <- lx * var(x,na.rm=T) + ly * var(y,na.rm=T)
+    csd <- csd/(lx + ly)
+    csd <- sqrt(csd)                     ## common sd computation
+
+    cd  <- md/csd                        ## cohen's d
+    pp <- t.test(x,y)$p.value
+    res <- paste(sprintf("%.2f",cd), if(pp<.05) "*" else "" ,sep="")
+    paste(gsub(pattern="0.",replacement=".",x=res,fixed=TRUE))
+}
+
+meansd_aov <- function(a, b, digM=2,digSD=digM){
+    sp_fun <- paste0("%1$1.",digM,"f (%2$1.",digSD,"f)")
+    sprintf(sp_fun,a,b)
+  }
+
+SEMsum_intext <- function(x, chi_v=x["ChiSqM_Value"], chi_df=x["ChiSqM_DF"], chi_p=x["ChiSqM_PValue"],
+                          RMSEA=x["RMSEA_Estimate"], CFI=x["CFI"]){
+  y <- sprintf("\\textchi\\textsuperscript{2} (%s) = %.2f, \\emph{p} = %.2f, RMSEA = %.2f, CFI = %.2f", chi_df,chi_v,chi_p,RMSEA,CFI)
+  if(chi_p < .0095) {
+    y <- sprintf("\\textchi\\textsuperscript{2} (%s) = %.2f, \\emph{p} = %.3f, RMSEA = %.2f, CFI = %.2f", chi_df,chi_v,chi_p,RMSEA,CFI)
+  }
+  if(chi_p < .00095){
+    y <- sprintf("\\textchi\\textsuperscript{2} (%s) = %.2f, \\emph{p} \\textless~.001, RMSEA = %.2f, CFI = %.2f", chi_df,chi_v,RMSEA,CFI)
+  }
+  y <- gsub(pattern="p} = 0.", replacement="p} = .", x=y)
+  y <- gsub(pattern="RMSEA = 0.", replacement="RMSEA = .", x=y)
+  y <- gsub(pattern="CFI = 0.", replacement="CFI = .", x=y)
+  paste(y)
+                       }
+
+SEMdif_intext <- function(x, chi_v=x["ChiSqDiffTest_Value"], chi_df=x["ChiSqDiffTest_DF"], chi_p=x["ChiSqDiffTest_PValue"],
+                          CFI=x["CFI"], y, CFId=y["CFI"]){
+  y <- sprintf("\\textDelta\\textchi\\textsuperscript{2} (%s) = %.2f, \\emph{p} = %.2f, \\textDelta CFI = %.2f", chi_df,chi_v,chi_p,abs(CFI-CFId))
+  if(chi_p < .0095) {
+  y <- sprintf("\\textDelta\\textchi\\textsuperscript{2} (%s) = %.2f, \\emph{p} = %.3f, \\textDelta CFI = %.2f", chi_df,chi_v,chi_p,abs(CFI-CFId))
+  }
+  if(chi_p < .00095){
+  y <- sprintf("\\textDelta\\textchi\\textsuperscript{2} (%s) = %.2f, \\emph{p} \\textless~.001, \\textDelta CFI = %.2f", chi_df,chi_v,abs(CFI-CFId))
+  }
+  y <- gsub(pattern="p} = 0.", replacement="p} = .", x=y)
+  y <- gsub(pattern="RMSEA = 0.", replacement="RMSEA = .", x=y)
+  y <- gsub(pattern="CFI = 0.", replacement="CFI = .", x=y)
+  paste(y)
+                       }
+
+ttest_intext <- function(x){
+  y <- sprintf("t(%1.0f) = %.2f, \\emph{p} = %.2f", x$parameter, x$statistic, x$p.value)
+  if(abs(x$statistic) < .0095){
+    y <- sprintf("t(%1.0f) = %.3f, \\emph{p} = %.2f", x$parameter, x$statistic, x$p.value)    
+  }
+  if(x$p.value < .0095) {
+    y <- sprintf("t(%1.0f) = %.2f, \\emph{p} = %.3f", 
+                 x$parameter, x$statistic, x$p.value)
+  }
+  if(x$p.value < .00095) {
+    y <- sprintf("t(%1.0f) = %.2f, \\emph{p} \\textless~.001", 
+                 x$parameter, x$statistic)
+  }
+  y <- gsub(pattern="p} = 0.", replacement="p} = .", x=y)
+  paste(y)
+}
+
+chisquare_intext <- function(x){
+  y <- sprintf("\\textchi\\textsuperscript{2} (%s) = %.2f, \\emph{p} = %.2f", 
+               x$parameter,x$statistic,x$p.value)
+  if(x$statistic < .0095){
+  y <- sprintf("\\textchi\\textsuperscript{2} (%s) = %.3f, \\emph{p} = %.2f", 
+               x$parameter,x$statistic,x$p.value)    
+  }
+  if(x$p.value < .0095 ) {
+    y <- sprintf("\\textchi\\textsuperscript{2} (%s) = %.2f, \\emph{p} = %.3f",
+                 x$parameter,x$statistic,x$p.value)
+  }
+  if(x$p.value < .00095){
+    y <- sprintf("\\textchi\\textsuperscript{2} (%s) = %.2f, \\emph{p} \\textless~.001",
+                 x$parameter,x$statistic)
+  }
+  y <- gsub(pattern="p} = 0.", replacement="p} = .", x=y)
+  paste(y)
+}
+@
+
+<<data, include=FALSE>>=
+# # SES score
+status <- read.csv(paste(wd,"Statusscores.csv",sep="\\"),sep=";")
+
+# # Base data
+load(paste(wd,"DataTOTima.RData",sep="\\"))
+# # Assign SDQ
+DataTOT$DataBO <- lapply(DataTOT$DataBO, function(x) sdq_par(y=x))
+DataTOT$DataBB <- lapply(DataTOT$DataBB, function(x) sdq_par(y=x))
+DataTOT$DataVO <- lapply(DataTOT$DataVO, function(x) sdq_you(y=x))
+
+# # Subset
+DataTOT <- lapply(DataTOT, function(x) {
+  lapply(x, function(y) {
+    if(any(str_detect(colnames(y),"country_birth_child"))){
+       # # Only Dutch children
+       y <- subset(y, country_birth_child == "Nederland")
+       # # Only full lists (SDQ)
+       mis <- is.na(y[,c(str_detect(string=colnames(y),
+                                    pattern=paste("consid","restles","somatic","shares","tantrum",
+                                                  "loner","obeys","worries","caring","fidgety",
+                                                  "friend","fights","unhappy","popular","distrac",
+                                                  "clingy","kind","lies","bullied","helpout",
+                                                  "reflect","steals","oldbest","afraid","attends",
+                                                  sep="|")))])
+       y <- y[rowSums(mis)==0,]
+       y       
+    } else {y}
+  })
+})
+
+# # Jeugdmonitor
+# DataJM <- read.spss("Jeugdmonitor/1.data_jo2009_BASISbestand.sav",
+#                     to.data.frame = TRUE,trim.factor.names = TRUE, trim_values = TRUE)
+# save(DataJM,file="DataJMima.RData")
+load(paste(wd,"DataJMima.RData",sep="\\"))
+
+# # Subset
+DataJM <- subset(DataJM, 
+                 # # Klas 2
+                 ALSKK301 == "klas 2" & 
+                 # # Zuid limburg
+                 regiocode == "Zuid limburg" &
+                 # # Only Dutch children
+                 BBETO401 == 1
+                 )
+
+# # Find location SDQ
+loc_SDQ01 <- which(colnames(DataJM) == "GGPGK301")
+loc_SDQ25 <- which(colnames(DataJM) == "GGPGK325")
+
+# # Only full lists (SDQ)
+mis <- is.na(DataJM[,loc_SDQ01:loc_SDQ25])
+DataJM <- DataJM[rowSums(mis)==0,]
+
+# # Rename SDQ variable names
+colnames(DataJM)[loc_SDQ01:loc_SDQ25] <- c(paste("sdq_0",1:9, sep=""),
+                                           paste("sdq_",10:25, sep=""))
+colnames(DataJM)[which(colnames(DataJM)=="BBGSK401")] <- "gender"
+DataJM$gender <- Recode(DataJM$gender, "1='M';2='V'")
+
+# # Recode SDQ variables to compare to JGZ list
+for(i in 1:25){
+  selVar <- colnames(DataJM[str_detect(string=colnames(DataJM), pattern="sdq")])[i]
+  if(i == 1){
+    DataJM[ ,selVar] <- Recode(DataJM[ ,selVar], "0='Niet waar';1='Een beetje waar';2='Zeker waar';3=NA")
+  }
+  DataJM[ ,selVar] <- as.numeric(Recode(DataJM[ ,selVar], "'Niet waar'=1;'Een beetje waar'=2;'Zeker waar'=3"))
+}
+
+# # Assign SDQ
+DataJM <- sdq_you(y=DataJM)
+
+# # Correct age
+DataJM$BBLFK301 <- DataJM$BBLFK301 + .5
+
+# VO_SEL <- VO
+# 
+# DataJM_SEL <- DataJM
+# 
+# Control <- data.frame()
+# Test    <- data.frame()
+# 
+# for(i in 1:nrow(DataJM)){
+# post <- DataJM[i,"MFGIK402"]  
+# sel_case <- which(as.numeric(str_sub(VO_SEL$postal,end=4)) == post)
+# if(length(sel_case) > 0){
+# sel_case <- sel_case[sample(1:length(sel_case),1,replace=T) ]
+# 
+# Control <- rbind(Control, DataJM_SEL[i,])
+# Test    <- rbind(Test   , VO_SEL[sel_case,])
+# VO_SEL  <- VO_SEL[-sel_case,]
+# }
+# cat(i, " from ", nrow(DataJM)," (",i/nrow(DataJM)*100,"%)", if(length(sel_case) == 0)"*","\n",sep="")
+# }
+# 
+# as.numeric(str_sub(DataJM$MFGIK402,end=4)
+@
+
+<<prep background, include=FALSE, cache=FALSE>>=
+VO <- rbind.fill(DataTOT$DataVO[(length(DataTOT$DataVO)-2):length(DataTOT$DataVO)])
+           
+# VO <- Test
+# DataJM <- Control
+
+# # gender
+gender <-
+  rbind(data.frame(Var=VO$gender, G="VO"),
+        data.frame(Var=DataJM$gender, G="JM"))
+
+gender_test <- 
+  chisq.test(gender[!is.na(gender$Var),"Var"],
+             gender[!is.na(gender$Var),"G"])
+
+gender_tab <- ddply(gender, ~ G, function(i) prop.table(table(i$Var))*100)
+
+
+# # age
+age_VO <- VO$age
+table(floor(age_VO))
+age_JM <- DataJM$BBLFM402
+age_JM <- as.numeric(gsub(" jaar", "", age_JM))
+age_JM <- DataJM$BBLFK301
+age <-
+  rbind(data.frame(Var=age_VO,G="VO"),
+        data.frame(Var=age_JM,G="JM"))
+
+age_test <- t.test(x=age_VO,y=age_JM)
+
+age_tab <- 
+  ddply(age, ~ G, function(i){c(Mean=mean(i$Var,na.rm=TRUE),
+                              SD=sd(i$Var,na.rm=TRUE))
+                              })
+
+# # SES
+post_VO <- cbind(VO,post=as.numeric(str_sub(VO$postal,end=4)))
+post_VO <- merge(status,post_VO,by.x="pcnr",by.y="post",all.y=TRUE)
+
+post_JM <- cbind(DataJM,post=as.numeric(str_sub(DataJM$MFGIK402,end=4)))
+post_JM <- merge(status,post_JM,by.x="pcnr",by.y="post",all.y=TRUE)
+
+post <-
+  rbind(data.frame(Var=post_VO$score10,G="VO"),
+        data.frame(Var=post_JM$score10,G="JM")) 
+
+ses_test <- 
+  t.test(post_JM$score10,
+         post_VO$score10)
+
+ses_tab <-
+  ddply(post, ~ G, function(i){c(Mean=mean(i$Var,na.rm=TRUE),
+                                 SD=sd(i$Var,na.rm=TRUE))
+                               })
+# set_tab <- t(set_tab)[-1,]
+
+# # Rural vs. non-rural
+postcod <- read.csv(paste(wd,"PostLim.csv",sep="\\"),sep=";")
+postcod$X6PP <- gsub(" ","",postcod$X6PP)
+postcod$X6PP <- as.numeric(str_sub(postcod$X6PP,end=4))
+postcod <- unique(postcod)
+
+rur_VO <- cbind(VO,post=as.numeric(str_sub(VO$postal,end=4)))
+rur_VO <- merge(postcod ,rur_VO, by.x="X6PP",by.y="post",all.y=TRUE)
+
+rur_JM <- cbind(DataJM,post=as.numeric(str_sub(DataJM$MFGIK402,end=4)))
+rur_JM <- merge(postcod ,rur_JM, by.x="X6PP",by.y="post",all.y=TRUE)
+
+rec_rural <- "'Maastricht'='Urban';'Heerlen'='Urban';else='Rural'"
+rural_VO <- Recode(rur_VO$Woonplaats, rec_rural)
+rural_JM <- Recode(rur_JM$Woonplaats, rec_rural)
+
+rural <-
+  rbind(data.frame(Var=rural_VO,G="VO"),
+        data.frame(Var=rural_JM,G="JM"))
+
+rural_test <- 
+  chisq.test(rural[!is.na(rural$Var),"Var"],
+             rural[!is.na(rural$Var),"G"])
+
+rural_tab <- ddply(rural, ~ G, function(i) prop.table(table(i$Var))*100)
+# rural_tab <- t(rural_tab)[-1,]
+  
+# # Thuissituatie
+# VO_homesit <- VO[,c("fam_moth","fam_fath","fam_br","fam_si","fam_fostfath","fam_fostmoth",
+#                     "fam_na","fam_other","fam_stepfath","fam_stepmoth")]
+# sel<- rowSums(VO_homesit) == 0 | is.na(rowSums(VO_homesit) )
+# 
+# VO_homesit <- VO_homesit[!sel,]
+
+homesit_VO <- VO$fam_moth + VO$fam_fath  
+homesit_VO <- Recode(homesit_VO, "1='Single';2='Two';0='Other'")
+
+JM_homesit <- DataJM[,c("MBGSK310","MBGSK311","MBGSK312","MBGSK313","MBGSK314","MBGSK315",
+                    "MBGSK316","MBGSK317","MBGSK318","MBGSK319","MBGSK320")]
+JM_homesit <- data.frame(apply(JM_homesit,2,function(x) Recode(x, "'Ja'=1;'Nee'=0")))
+
+sel<- rowSums(JM_homesit) == 0 | is.na(rowSums(JM_homesit) )
+JM_homesit <- JM_homesit[!sel,]
+
+homesit_JM <- JM_homesit[,1] + JM_homesit[,2] + (10*JM_homesit[,5])
+
+homesit_JM <- Recode(homesit_JM, "1='Single';2='Two';0='Other';10='Single';11:12=NA")
+
+# prop.table(table(homesit_JM))
+# prop.table(table(homesit_VO))
+
+homesit <-
+  rbind(data.frame(Var=homesit_VO,G="VO"),
+        data.frame(Var=homesit_JM,G="JM"))
+
+homesit_test <-
+  chisq.test(homesit[!is.na(homesit$Var),"Var"],
+             homesit[!is.na(homesit$Var),"G"])
+
+homesit_tab <- ddply(homesit, ~G, function(i) prop.table(table(i$Var))*100)
+# homesit_tab <- t(homesit_tab)[-1,]
+
+background <-
+  rbind(
+    data.frame(Cat="@Gender", JGZ=NA, JM=NA, Test=NA),
+    data.frame(Cat= paste("\\enspace",
+                          gsub2(c("M","V"), c("Male","Female"), colnames(gender_tab)[-1]),
+                          "(\\%)"),
+              JGZ=sprintf("%.2f",gender_tab[1,-1]), 
+              JM =sprintf("%.2f",gender_tab[2,-1]), 
+              Test = c(chisquare_intext(gender_test),rep(NA,ncol(gender_tab)-2))),
+  
+    data.frame(Cat="@Age", JGZ=NA, JM=NA, Test=NA),
+    data.frame(Cat= paste("\\enspace","Mean (SD)"),
+              JGZ=paste(paste(sprintf("%.2f",age_tab[1,2:3]),collapse=" ("),")",sep=""),
+              JM =paste(paste(sprintf("%.2f",age_tab[2,2:3]),collapse=" ("),")",sep=""), 
+              Test= ttest_intext(age_test)),
+  
+    data.frame(Cat="@SES", JGZ=NA, JM=NA, Test=NA),
+    data.frame(Cat= paste("\\enspace","Mean (SD)"),
+              JGZ=paste(paste(sprintf("%.2f",ses_tab[1,2:3]),collapse=" ("),")",sep=""),
+              JM =paste(paste(sprintf("%.2f",ses_tab[2,2:3]),collapse=" ("),")",sep=""), 
+              Test= ttest_intext(ses_test)),
+  
+    data.frame(Cat="@Homesit", JGZ=NA, JM=NA, Test=NA),
+    data.frame(Cat= paste("\\enspace",colnames(homesit_tab)[-1], "(\\%)"),
+              JGZ=sprintf("%.2f",homesit_tab[1,-1]), 
+              JM =sprintf("%.2f",homesit_tab[2,-1]), 
+              Test = c(chisquare_intext(homesit_test),rep(NA,ncol(homesit_tab)-2))),
+  
+    data.frame(Cat="@Rural", JGZ=NA, JM=NA, Test=NA),
+    data.frame(Cat= paste("\\enspace",colnames(rural_tab)[-1], "(\\%)"),
+              JGZ=sprintf("%.2f",rural_tab[1,-1]), 
+              JM =sprintf("%.2f",rural_tab[2,-1]), 
+              Test = c(chisquare_intext(rural_test),rep(NA,ncol(rural_tab)-2)))
+)
+
+
+
+XX <- "..."
+XXX <- ".." 
+split_JGZ    <- strsplit(sub("[.]\\s*", XX, background$JGZ), XXX,fixed=TRUE)
+split_JM     <- strsplit(sub("[.]\\s*", XX, background$JM), XXX,fixed=TRUE)
+# split_Effect <- strsplit(sub("[.]\\s*", XX, compU$Effect), XXX,fixed=TRUE)
+
+# rowN <- background$Cat
+background_prep <- data.frame(
+  Cat      = background[,"Cat"],
+  JGZ_1    = unlist(lapply(split_JGZ,    function(x) x[[1]])),
+  JGZ_2    = unlist(lapply(split_JGZ,    function(x) if(length(x) == 2) x[[2]] else NA)),
+  JM_1     = unlist(lapply(split_JM,     function(x) x[[1]])),
+  JM_2     = unlist(lapply(split_JM,    function(x) if(length(x) == 2) x[[2]] else NA)),
+#                         Effect_1 = unlist(lapply(split_Effect, function(x) x[[1]])),
+  effect   = background[,"Test"])
+
+                    
+background_tabx <- xtable(background_prep,caption="Background characteristics")
+
+align(background_tabx) <- c("l", "l","r@{","}l","r@{","}l","r")
+
+clean_col <- function(x){
+ paste("XXXXXXXXXXXXXXXXXXX")
+}
+
+# clean_row <- function(y){
+#   y <- 
+#   y <- gsub("\\d",replacement="",y)
+#   y <- gsub2(c("Males","Females","Effect","\\<Total\\>"),
+#              paste("\\\\enspace",c("Males","Females","Effect","Total")),y)
+#   y <- gsub("Tootal","Total",y)
+#   paste(y)
+# }
+
+background_capture <-
+  capture.output(
+    print(background_tabx,include.rownames=FALSE,caption.placement="top",booktabs=TRUE,
+          tabular.environment="tabularx",width="\\textwidth",latex.environments="flushleft",
+          NA.string=c(""),table.placement=placement,floating.environment="table",
+          sanitize.colnames.function = function(x) clean_col(x),
+          sanitize.text.function=identity
+#           sanitize.rownames.function = function(y) clean_row(y)
+          )
+    )
+
+background_capture <-
+  gsub2(c("@Gender &","@Age &","@SES &","@Homesit &","@Rural &"),
+        paste("\\\\multicolumn{2}{l}{",
+              c("Gender","Age","SES",
+                "Homesituation","Rural"),
+              "}",sep=""),
+        background_capture)
+
+background_capture <-
+  gsub("XXXXXXXXXXXXXXXXXXX",
+       "\\\\multicolumn{1}{C}{} &   \\\\multicolumn{2}{X}{PYHC} &   \\\\multicolumn{2}{X}{School} & \\\\multicolumn{1}{r}{Difference Test}",
+       background_capture)
+
+background_capture <-
+  gsub("\\end{tabularx}",
+       "\\end{tabularx} PYHC = Preventive Youth Health Care.",background_capture,fixed=TRUE)
+
+# # Niveau
+# school_conv <- read.table("School_Level.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
+# class_conv  <- read.table("Class_Level.csv", header=TRUE, sep=",", stringsAsFactors=FALSE)
+
+# country_birth_VO <- VO$country_birth_child
+# country_birth_VO <- Recode(country_birth_VO, "'Aruba'=3;'Belgie'=2;'Duitsland'=2;
+#                                               'Marokko'=3;'Nederlandse Antillen'=3;
+#                                               'Turkije'=3;'Nederland'=1;else=NA")
+# 
+# country_birth_JM <- DataJM$BBETO401
+# country_birth_JM <- Recode(country_birth_JM, "1=1;2:6=3;7:8=2;else=NA")
+
+
+# prop.table(table(country_birth_VO))
+# prop.table(table(country_birth_JM))
+
+# country_birth <- 
+#   rbind(data.frame(Var=country_birth_VO,G="VO"),
+#         data.frame(Var=country_birth_JM,G="JM"))
+# 
+# chisq.test(country_birth[!is.na(country_birth$Var),"Var"],country_birth[!is.na(country_birth$Var),"G"])
+
+# # Country of birth mother
+# country_moth_VO <- VO$country_birth_moth
+# country_moth_VO <- Recode(country_moth_VO, "'Aruba'=3;'Belgie'=2;'Duitsland'=2;
+#                                               'Marokko'=3;'Nederlandse Antillen'=3;
+#                                               'Turkije'=3;'Nederland'=1;else=NA")
+# 
+# country_moth_JM <- DataJM$BBETO402
+# country_moth_JM <- Recode(country_moth_JM, "1=1;2:6=3;7:8=2;else=NA")
+
+# prop.table(table(country_moth_VO))
+# prop.table(table(country_moth_JM))
+
+# country_moth <- 
+#   rbind(data.frame(Var=country_moth_VO,G="VO"),
+#         data.frame(Var=country_moth_JM,G="JM"))
+# 
+# chisq.test(country_moth[!is.na(country_moth$Var),"Var"],country_moth[!is.na(country_moth$Var),"G"])
+
+# # Country of birth mother
+# country_fath_VO <- VO$country_birth_fath
+# country_fath_VO <- Recode(country_fath_VO, "'Aruba'=3;'Belgie'=2;'Duitsland'=2;
+#                                               'Marokko'=3;'Nederlandse Antillen'=3;
+#                                               'Turkije'=3;'Nederland'=1;else=NA")
+# 
+# country_fath_JM <- DataJM$BBETO403
+# country_fath_JM <- Recode(country_fath_JM, "1=1;2:6=3;7:8=2;else=NA")
+
+# prop.table(table(country_fath_VO))
+# prop.table(table(country_fath_JM))
+
+# country_fath <- 
+#   rbind(data.frame(Var=country_fath_VO,G="VO"),
+#         data.frame(Var=country_fath_JM,G="JM"))
+# 
+# chisq.test(country_fath[!is.na(country_fath$Var),"Var"],country_fath[!is.na(country_fath$Var),"G"])
+@
+
+<<prep Comparison, include=FALSE, cache=FALSE>>=
+sdq_JM <- data.frame( DataJM[,c("sdq_emotion","sdq_conduct","sdq_hyper","sdq_peer","sdq_prosoc","sdq_tot","gender")],G="JM")
+
+# VO <- rbind.fill(DataTOT$DataVO[(length(DataTOT$DataVO)-2):length(DataTOT$DataVO)])
+sdq_VO <- data.frame(     VO[,c("sdq_emotion","sdq_conduct","sdq_hyper","sdq_peer","sdq_prosoc","sdq_tot","gender")],G="JGZ")
+
+compU <-
+  data.frame(var    = rep(colnames(sdq_JM)[1:6],each=5),
+             group  = rep(c("Var","Total","Males","Females","Effect")),
+             JGZ    = NA,
+             JM     = NA,
+             Effect = NA)
+
+compU$group <- as.character(compU$group)
+
+selvar <- colnames(sdq_JM)[1:6]
+
+for(i in 1:6){
+  var <- selvar[i]
+  compU[compU$var == var, 3:5] <- 
+    matrix(byrow=TRUE,ncol=3,nrow=5,
+      data=c(NA,NA,NA,
+             meansd(sdq_VO[,var]),
+             meansd(sdq_JM[,var]),
+             cohens_d(sdq_VO[,var],sdq_JM[,var]),
+             meansd(subset(sdq_VO,gender=="M")[,var]),
+             meansd(subset(sdq_JM,gender=="M")[,var]),
+             cohens_d(subset(sdq_VO,gender=="M")[,var],subset(sdq_JM,gender=="M")[,var]),
+             meansd(subset(sdq_VO,gender=="V")[,var]),
+             meansd(subset(sdq_JM,gender=="V")[,var]),
+             cohens_d(subset(sdq_VO,gender=="V")[,var],subset(sdq_JM,gender=="V")[,var]),
+             cohens_d(subset(sdq_VO,gender=="V")[,var],subset(sdq_VO,gender=="M")[,var]),
+             cohens_d(subset(sdq_JM,gender=="V")[,var],subset(sdq_JM,gender=="M")[,var]),
+             NA))
+  compU[compU$var == var & compU$group == "Var","group"] <- var
+             
+}
+
+compU <- compU[compU$group!="Total",]
+
+compU_prep <- compU[,-1]
+
+
+
+XX <- "..."
+XXX <- ".." 
+split_JGZ    <- strsplit(sub("[.]\\s*", XX, compU$JGZ), XXX,fixed=TRUE)
+split_JM     <- strsplit(sub("[.]\\s*", XX, compU$JM), XXX,fixed=TRUE)
+# split_Effect <- strsplit(sub("[.]\\s*", XX, compU$Effect), XXX,fixed=TRUE)
+
+rowN <- compU_prep[,"group"]
+compU_prep <- data.frame(
+                        JGZ_1    = unlist(lapply(split_JGZ,    function(x) x[[1]])),
+                        JGZ_2    = unlist(lapply(split_JGZ,    function(x) if(length(x) == 2) x[[2]] else NA)),
+                        JM_1     = unlist(lapply(split_JM,     function(x) x[[1]])),
+                        JM_2     = unlist(lapply(split_JM,    function(x) if(length(x) == 2) x[[2]] else NA)),
+#                         Effect_1 = unlist(lapply(split_Effect, function(x) x[[1]])),
+                        effect=compU_prep[,"Effect"])
+rownames(compU_prep) <- paste(1:length(rowN),rowN,sep="")
+                        
+compU_tabx <- xtable(compU_prep,caption="Comparison (unadjusted) between the two settings")
+
+align(compU_tabx) <- c("l","r@{","}l","r@{","}l","l")
+
+clean_col <- function(x){
+ paste("XXXXXXXXXXXXXXXXXXX")
+}
+
+clean_row <- function(y){
+  y <- gsub("\\d",replacement="",y)
+  y <- gsub2(c("Males","Females","Effect","\\<Total\\>"),
+             paste("\\\\enspace",c("Males","Females","Effect","Total")),y)
+  y <- gsub("Tootal","Total",y)
+  paste(y)
+}
+
+compU_capture <-
+  capture.output(
+    print(compU_tabx,include.rownames=TRUE,caption.placement="top",booktabs=TRUE,
+          tabular.environment="tabularx",width="\\textwidth",latex.environments="flushleft",
+          NA.string=c(""),table.placement=placement,floating.environment="table",
+          sanitize.colnames.function = function(x) clean_col(x),
+          sanitize.rownames.function = function(y) clean_row(y)
+          )
+    )
+
+compU_capture <-
+  gsub2(c("sdq_emotion &","sdq_conduct &","sdq_hyper &","sdq_peer &","sdq_prosoc &","sdq_tot &"),
+        paste("\\\\multicolumn{2}{l}{",
+              c("Emotional symptoms","Conduct problems","Hyperactivity",
+                "Peer problems","Prosocial behaviour","Total difficulties score"),
+              "}",sep=""),
+        compU_capture)
+
+compU_capture <-
+  gsub(" & XXXXXXXXXXXXXXXXXXX",
+       "\\\\multicolumn{1}{C}{} &  & \\\\multicolumn{1}{l}{PYHC} &  & \\\\multicolumn{1}{l}{School} & \\\\multicolumn{1}{c}{N}",
+       compU_capture)
+
+compU_capture <-
+  gsub("\\end{tabularx}",
+       "\\end{tabularx} PYHC = Preventive Youth Health Care.",compU_capture,fixed=TRUE)
+@
+
+<<prep adjusted comparison, include=FALSE, cache=TRUE>>=
+compA <-
+  data.frame(var    = rep(colnames(sdq_JM)[1:6],each=4),
+             group  = rep(c("Var","Males","Females","Effect")),
+             JGZ    = NA,
+             JM     = NA,
+             Effect = NA)
+
+compA$group <- as.character(compA$group)
+
+selvar <- colnames(sdq_JM)[1:6]
+
+
+sdq_JM <- data.frame( DataJM[,c("sdq_emotion","sdq_conduct","sdq_hyper","sdq_peer","sdq_prosoc","sdq_tot","gender")],
+                      G="JM", age=age_JM , ses=post_JM$score10)
+
+# VO <- rbind.fill(DataTOT$DataVO[(length(DataTOT$DataVO)-2):length(DataTOT$DataVO)])
+sdq_VO <- data.frame( VO[,c("sdq_emotion","sdq_conduct","sdq_hyper","sdq_peer","sdq_prosoc","sdq_tot","gender")],
+                      G="JGZ", age=age_VO, ses=post_VO$score10)
+
+sdq_JMVO <- rbind(sdq_JM,sdq_VO)
+sdq_JMVO$gender <- Recode(sdq_JMVO$gender, "'11'=NA")
+sdq_JMVO$group <- paste(sdq_JMVO$G,sdq_JMVO$gender,sep="")
+sdq_JMVO <- sdq_JMVO[!is.na(sdq_JMVO$gender),]
+
+for(i in 1:6){
+  var <- selvar[i]
+  res_aov <- aov(as.formula(paste(var," ~ group + age + ses")), data=sdq_JMVO)
+  sum_aov <- anova.lm(res_aov)
+  eff_aov <- sum_aov$"Sum Sq"/(sum_aov$"Sum Sq"+sum_aov$"Sum Sq"[length(sum_aov$"Sum Sq")])
+  eff_aov[length(sum_aov$"Sum Sq")] <- ""
+  sum_aov$"Partial Eta Sq" <- eff_aov
+  mar_aov <- effect("group", res_aov, se=TRUE)
+  
+  compA[compA$var == var, 3:5] <- 
+    matrix(byrow=TRUE,ncol=3,nrow=4,
+      data=c(NA,NA,NA,
+             meansd_aov(mar_aov$fit[1],mar_aov$se[1]),
+             meansd_aov(mar_aov$fit[3],mar_aov$se[3]),
+             cohens_aov(a="JGZM", b="JMM", var=var),
+             meansd_aov(mar_aov$fit[2],mar_aov$se[2]),
+             meansd_aov(mar_aov$fit[4],mar_aov$se[4]),
+             cohens_aov(a="JGZV", b="JMV", var=var),    
+             cohens_aov(a="JGZM", b="JGZV", var=var),
+             cohens_aov(a="JMM", b="JMV", var=var),
+             NA))
+  compA[compA$var == var & compA$group == "Var","group"] <- var            
+}
+
+compA_prep <- compA[,-1]
+
+
+XX <- "..."
+XXX <- ".." 
+split_JGZ    <- strsplit(sub("[.]\\s*", XX, compA$JGZ), XXX,fixed=TRUE)
+split_JM     <- strsplit(sub("[.]\\s*", XX, compA$JM), XXX,fixed=TRUE)
+# split_Effect <- strsplit(sub("[.]\\s*", XX, compA$Effect), XXX,fixed=TRUE)
+
+rowN <- compA_prep[,"group"]
+compA_prep <- data.frame(
+                        JGZ_1    = unlist(lapply(split_JGZ,    function(x) x[[1]])),
+                        JGZ_2    = unlist(lapply(split_JGZ,    function(x) if(length(x) == 2) x[[2]] else NA)),
+                        JM_1     = unlist(lapply(split_JM,     function(x) x[[1]])),
+                        JM_2     = unlist(lapply(split_JM,    function(x) if(length(x) == 2) x[[2]] else NA)),
+#                         Effect_1 = unlist(lapply(split_Effect, function(x) x[[1]])),
+                        effect=compA_prep[,"Effect"])
+rownames(compA_prep) <- paste(1:length(rowN),rowN,sep="")
+                        
+compA_tabx <- xtable(compA_prep,caption="Comparison (adjusted) between the two settings")
+
+align(compA_tabx) <- c("l","r@{","}l","r@{","}l","l")
+
+clean_col <- function(x){
+ paste("XXXXXXXXXXXXXXXXXXX")
+}
+
+clean_row <- function(y){
+  y <- gsub("\\d",replacement="",y)
+  y <- gsub2(c("Males","Females","Effect","\\<Total\\>"),
+             paste("\\\\enspace",c("Males","Females","Effect","Total")),y)
+  y <- gsub("Tootal","Total",y)
+  paste(y)
+}
+
+compA_capture <-
+  capture.output(
+    print(compA_tabx,include.rownames=TRUE,caption.placement="top",booktabs=TRUE,
+          tabular.environment="tabularx",width="\\textwidth",latex.environments="flushleft",
+          NA.string=c(""),table.placement=placement,floating.environment="table",
+          sanitize.colnames.function = function(x) clean_col(x),
+          sanitize.rownames.function = function(y) clean_row(y)
+          )
+    )
+
+compA_capture <-
+  gsub2(c("sdq_emotion &","sdq_conduct &","sdq_hyper &","sdq_peer &","sdq_prosoc &","sdq_tot &"),
+        paste("\\\\multicolumn{2}{l}{",
+              c("Emotional symptoms","Conduct problems","Hyperactivity",
+                "Peer problems","Prosocial behaviour","Total difficulties score"),
+              "}",sep=""),
+        compA_capture)
+
+compA_capture <-
+  gsub(" & XXXXXXXXXXXXXXXXXXX",
+       "\\\\multicolumn{1}{C}{} &  & \\\\multicolumn{1}{l}{PYHC} &  & \\\\multicolumn{1}{l}{School} & \\\\multicolumn{1}{c}{N}",
+       compA_capture)
+
+compA_capture <-
+  gsub("\\end{tabularx}",
+       "\\end{tabularx} PYHC = Preventive Youth Health Care.",compA_capture,fixed=TRUE)
+@
+
+<<prep Cutoff points and percentages, include=FALSE, cache=FALSE>>=
+# # Select JM data and variables
+JM_sdq <- DataJM[,c("sdq_tot","sdq_emotion","sdq_conduct","sdq_hyper" ,"sdq_peer", "sdq_prosoc","gender")]
+
+# # Select JGZ data and variables
+VO <- rbind.fill(DataTOT$DataVO[(length(DataTOT$DataVO)-2):length(DataTOT$DataVO)])
+VO_sdq <- VO[,c("sdq_tot","sdq_emotion","sdq_conduct","sdq_hyper" ,"sdq_peer", "sdq_prosoc","sdq_impact","gender")]
+
+# # Generate cut-off points for JM
+JM_cut <- apply(JM_sdq[,1:6],2, function(x) quantile(x=x, probs=c(.8,.9), na.rm=TRUE))
+JM_cut[,"sdq_prosoc"] <- quantile(x=JM_sdq$sdq_prosoc,probs=c(.2,.1),na.rm=TRUE)
+
+# # Generate cut-off points for JGZ
+VO_cut <- apply(VO_sdq[,1:6],2, function(x) quantile(x=x, probs=c(.8,.9), na.rm=TRUE))
+VO_cut[,"sdq_prosoc"] <- quantile(x=VO_sdq$sdq_prosoc,probs=c(.2,.1),na.rm=TRUE)
+
+# # Design distrubution frame for JM own cut-off
+JM_dis <- data.frame(matrix(nrow=6,ncol=12))
+rownames(JM_dis) <- c("sdq_tot","sdq_emotion","sdq_conduct","sdq_hyper" ,"sdq_peer", "sdq_prosoc")
+colnames(JM_dis) <- c("cNor","tNor","mNor","vNor","cBor","tBor","mBor","vBor","cAbn","tAbn","mAbn","vAbn")
+
+for(i in 1:6){
+  selVar <- colnames(JM_sdq)[i]
+  # # Cut-off
+  JM_dis[selVar,c(1,5,9)] <- c(paste("0-",JM_cut[1,selVar],sep=""),
+                               paste(JM_cut[1,selVar]+1,"-",JM_cut[2,selVar],sep=""),
+                               paste(JM_cut[2,selVar]+1,"-10",sep=""))
+  if(selVar == "sdq_prosoc"){
+  JM_dis[selVar,c(1,5,9)] <- c(paste("10-",JM_cut[1,selVar] ,sep=""),
+                               paste(JM_cut[2,selVar],"-",JM_cut[1,selVar] - 1,sep=""),
+                               paste(JM_cut[2,selVar] -1,"-0",sep=""))}
+  if(selVar == "sdq_tot"){
+  JM_dis[selVar,c(1,5,9)] <- c(paste("0-",JM_cut[1,selVar],sep=""),
+                               paste(JM_cut[1,selVar]+1,"-",JM_cut[2,selVar],sep=""),
+                               paste(JM_cut[2,selVar]+1,"-40",sep=""))}
+  eq <- str_split(JM_dis[selVar,"cBor"],pattern="-")
+  if(eq[[1]][1]==eq[[1]][2]) JM_dis[selVar,"cBor"] <- eq[[1]][1]
+  
+  # # Total
+  JM_dis[selVar,c(2,6,10)] <- c(sum(JM_sdq[,selVar] <= JM_cut[1,selVar], na.rm=TRUE),
+                             sum(JM_sdq[,selVar] <= JM_cut[2,selVar] & 
+                                   JM_sdq[,selVar] > JM_cut[1,selVar], na.rm=TRUE),
+                             sum(JM_sdq[,selVar] > JM_cut[2,selVar], na.rm=TRUE)) / 
+                             sum(!is.na(JM_sdq[,selVar]),na.rm=TRUE) * 100
+  if(selVar == "sdq_prosoc"){
+  JM_dis[selVar,c(2,6,10)] <- c(sum(JM_sdq[,selVar] >= JM_cut[1,selVar], na.rm=TRUE),
+                             sum(JM_sdq[,selVar] >= JM_cut[2,selVar] & 
+                                   JM_sdq[,selVar] < JM_cut[1,selVar], na.rm=TRUE),
+                             sum(JM_sdq[,selVar] < JM_cut[2,selVar], na.rm=TRUE)) / 
+                             sum(!is.na(JM_sdq[,selVar]),na.rm=TRUE) * 100
+  }
+  # # Boys
+  JM_sdqM <- subset(JM_sdq,gender=="M")
+  JM_dis[selVar,c(3,7,11)] <- c(sum(JM_sdqM[,selVar] <= JM_cut[1,selVar], na.rm=TRUE),
+                             sum(JM_sdqM[,selVar] <= JM_cut[2,selVar] & 
+                                   JM_sdqM[,selVar] > JM_cut[1,selVar], na.rm=TRUE),
+                             sum(JM_sdqM[,selVar] > JM_cut[2,selVar], na.rm=TRUE)) / 
+                             sum(!is.na(JM_sdqM[,selVar]),na.rm=TRUE) * 100
+  if(selVar == "sdq_prosoc"){
+  JM_dis[selVar,c(3,7,11)] <- c(sum(JM_sdqM[,selVar] >= JM_cut[1,selVar], na.rm=TRUE),
+                             sum(JM_sdqM[,selVar] >= JM_cut[2,selVar] & 
+                                   JM_sdqM[,selVar] < JM_cut[1,selVar], na.rm=TRUE),
+                             sum(JM_sdqM[,selVar] < JM_cut[2,selVar], na.rm=TRUE)) / 
+                             sum(!is.na(JM_sdqM[,selVar]),na.rm=TRUE) * 100
+  }
+  # # Girls
+  JM_sdqV <- subset(JM_sdq,gender=="V")
+  JM_dis[selVar,c(4,8,12)] <- c(sum(JM_sdqV[,selVar] <= JM_cut[1,selVar], na.rm=TRUE),
+                             sum(JM_sdqV[,selVar] <= JM_cut[2,selVar] & 
+                                   JM_sdqV[,selVar] > JM_cut[1,selVar], na.rm=TRUE),
+                             sum(JM_sdqV[,selVar] > JM_cut[2,selVar], na.rm=TRUE)) / 
+                             sum(!is.na(JM_sdqV[,selVar]),na.rm=TRUE) * 100
+  if(selVar == "sdq_prosoc"){
+  JM_dis[selVar,c(4,8,12)] <- c(sum(JM_sdqV[,selVar] >= JM_cut[1,selVar], na.rm=TRUE),
+                             sum(JM_sdqV[,selVar] >= JM_cut[2,selVar] & 
+                                   JM_sdqV[,selVar] < JM_cut[1,selVar], na.rm=TRUE),
+                             sum(JM_sdqV[,selVar] < JM_cut[2,selVar], na.rm=TRUE)) / 
+                             sum(!is.na(JM_sdqV[,selVar]),na.rm=TRUE) * 100
+  }
+    
+}
+
+
+# # Design distrubution frame for JGZ own cut-off
+VO_dis <- data.frame(matrix(nrow=6,ncol=12))
+rownames(VO_dis) <- c("sdq_tot","sdq_emotion","sdq_conduct","sdq_hyper" ,"sdq_peer", "sdq_prosoc")
+colnames(VO_dis) <- c("cNor","tNor","mNor","vNor","cBor","tBor","mBor","vBor","cAbn","tAbn","mAbn","vAbn")
+
+for(i in 1:6){
+  selVar <- colnames(VO_sdq)[i]
+  # # Cut-off
+  VO_dis[selVar,c(1,5,9)] <- c(paste("0-",VO_cut[1,selVar],sep=""),
+                               paste(VO_cut[1,selVar]+1,"-",VO_cut[2,selVar],sep=""),
+                               paste(VO_cut[2,selVar]+1,"-10",sep=""))
+  if(selVar == "sdq_prosoc"){
+  VO_dis[selVar,c(1,5,9)] <- c(paste("10-",VO_cut[1,selVar],sep=""),
+                               paste(VO_cut[2,selVar],"-",VO_cut[1,selVar] - 1,sep=""),
+                               paste(VO_cut[2,selVar] - 1,"-0",sep=""))}
+  if(selVar == "sdq_tot"){
+  VO_dis[selVar,c(1,5,9)] <- c(paste("0-",VO_cut[1,selVar],sep=""),
+                               paste(VO_cut[1,selVar]+1,"-",VO_cut[2,selVar],sep=""),
+                               paste(VO_cut[2,selVar]+1,"-40",sep=""))}
+  eq <- str_split(VO_dis[selVar,"cBor"],pattern="-")
+  if(eq[[1]][1]==eq[[1]][2]) VO_dis[selVar,"cBor"] <- eq[[1]][1]
+  
+  # # Total
+  VO_dis[selVar,c(2,6,10)] <- c(sum(VO_sdq[,selVar] <= VO_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdq[,selVar] <= VO_cut[2,selVar] & 
+                                   VO_sdq[,selVar] > VO_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdq[,selVar] > VO_cut[2,selVar], na.rm=TRUE)) / 
+                             sum(!is.na(VO_sdq[,selVar]),na.rm=TRUE) * 100
+  if(selVar == "sdq_prosoc"){
+  VO_dis[selVar,c(2,6,10)] <- c(sum(VO_sdq[,selVar] >= VO_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdq[,selVar] >= VO_cut[2,selVar] & 
+                                   VO_sdq[,selVar] < VO_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdq[,selVar] < VO_cut[2,selVar], na.rm=TRUE)) / 
+                             sum(!is.na(VO_sdq[,selVar]),na.rm=TRUE) * 100
+  }
+  # # Boys
+  VO_sdqM <- subset(VO_sdq,gender=="M")
+  VO_dis[selVar,c(3,7,11)] <- c(sum(VO_sdqM[,selVar] <= VO_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdqM[,selVar] <= VO_cut[2,selVar] & 
+                                   VO_sdqM[,selVar] > VO_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdqM[,selVar] > VO_cut[2,selVar], na.rm=TRUE)) / 
+                             sum(!is.na(VO_sdqM[,selVar]),na.rm=TRUE) * 100
+  if(selVar == "sdq_prosoc"){
+  VO_dis[selVar,c(3,7,11)] <- c(sum(VO_sdqM[,selVar] >= VO_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdqM[,selVar] >= VO_cut[2,selVar] & 
+                                   VO_sdqM[,selVar] < VO_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdqM[,selVar] < VO_cut[2,selVar], na.rm=TRUE)) / 
+                             sum(!is.na(VO_sdqM[,selVar]),na.rm=TRUE) * 100
+  }
+  # # Girls
+  VO_sdqV <- subset(VO_sdq,gender=="V")
+  VO_dis[selVar,c(4,8,12)] <- c(sum(VO_sdqV[,selVar] <= VO_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdqV[,selVar] <= VO_cut[2,selVar] & 
+                                   VO_sdqV[,selVar] > VO_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdqV[,selVar] > VO_cut[2,selVar], na.rm=TRUE)) / 
+                             sum(!is.na(VO_sdqV[,selVar]),na.rm=TRUE) * 100
+  if(selVar == "sdq_prosoc"){
+  VO_dis[selVar,c(4,8,12)] <- c(sum(VO_sdqV[,selVar] >= VO_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdqV[,selVar] >= VO_cut[2,selVar] & 
+                                   VO_sdqV[,selVar] < VO_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdqV[,selVar] < VO_cut[2,selVar], na.rm=TRUE)) / 
+                             sum(!is.na(VO_sdqV[,selVar]),na.rm=TRUE) * 100
+  }
+    
+}
+ 
+# # Design distrubution frame for JGZ using JM cut-off
+VO_disJM <- data.frame(matrix(nrow=6,ncol=12))
+rownames(VO_disJM) <- c("sdq_tot","sdq_emotion","sdq_conduct","sdq_hyper" ,"sdq_peer", "sdq_prosoc")
+colnames(VO_disJM) <- c("cNor","tNor","mNor","vNor","cBor","tBor","mBor","vBor","cAbn","tAbn","mAbn","vAbn")
+
+
+for(i in 1:6){
+  selVar <- colnames(VO_sdq)[i]
+  # # Cut-off
+  VO_disJM[selVar,c(1,5,9)] <- c(paste("0-",JM_cut[1,selVar],sep=""),
+                               paste(JM_cut[1,selVar]+1,"-",JM_cut[2,selVar],sep=""),
+                               paste(JM_cut[2,selVar]+1,"-10",sep=""))
+  if(selVar == "sdq_prosoc"){
+  VO_disJM[selVar,c(1,5,9)] <- c(paste("10-",JM_cut[1,selVar],sep=""),
+                               paste(JM_cut[2,selVar],"-",JM_cut[1,selVar] - 1,sep=""),
+                               paste(JM_cut[2,selVar] - 1,"-0",sep=""))}
+  if(selVar == "sdq_tot"){
+  VO_disJM[selVar,c(1,5,9)] <- c(paste("0-",JM_cut[1,selVar],sep=""),
+                               paste(JM_cut[1,selVar]+1,"-",JM_cut[2,selVar],sep=""),
+                               paste(JM_cut[2,selVar]+1,"-40",sep=""))}
+  eq <- str_split(VO_disJM[selVar,"cBor"],pattern="-")
+  if(eq[[1]][1]==eq[[1]][2]) VO_disJM[selVar,"cBor"] <- eq[[1]][1]
+  
+  # # Total
+  VO_disJM[selVar,c(2,6,10)] <- c(sum(VO_sdq[,selVar] <= JM_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdq[,selVar] <= JM_cut[2,selVar] & 
+                                   VO_sdq[,selVar] > JM_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdq[,selVar] > JM_cut[2,selVar], na.rm=TRUE)) / 
+                             sum(!is.na(VO_sdq[,selVar]),na.rm=TRUE) * 100
+  if(selVar == "sdq_prosoc"){
+  VO_disJM[selVar,c(2,6,10)] <- c(sum(VO_sdq[,selVar] >= JM_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdq[,selVar] >= JM_cut[2,selVar] & 
+                                   VO_sdq[,selVar] < JM_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdq[,selVar] < JM_cut[2,selVar], na.rm=TRUE)) / 
+                             sum(!is.na(VO_sdq[,selVar]),na.rm=TRUE) * 100
+  }
+  # # Boys
+  VO_sdqM <- subset(VO_sdq,gender=="M")
+  VO_disJM[selVar,c(3,7,11)] <- c(sum(VO_sdqM[,selVar] <= JM_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdqM[,selVar] <= JM_cut[2,selVar] & 
+                                   VO_sdqM[,selVar] > JM_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdqM[,selVar] > JM_cut[2,selVar], na.rm=TRUE)) / 
+                             sum(!is.na(VO_sdqM[,selVar]),na.rm=TRUE) * 100
+  if(selVar == "sdq_prosoc"){
+  VO_disJM[selVar,c(3,7,11)] <- c(sum(VO_sdqM[,selVar] >= JM_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdqM[,selVar] >= JM_cut[2,selVar] & 
+                                   VO_sdqM[,selVar] < JM_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdqM[,selVar] < JM_cut[2,selVar], na.rm=TRUE)) / 
+                             sum(!is.na(VO_sdqM[,selVar]),na.rm=TRUE) * 100
+  }
+  # # Girls
+  VO_sdqV <- subset(VO_sdq,gender=="V")
+  VO_disJM[selVar,c(4,8,12)] <- c(sum(VO_sdqV[,selVar] <= JM_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdqV[,selVar] <= JM_cut[2,selVar] & 
+                                   VO_sdqV[,selVar] > JM_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdqV[,selVar] > JM_cut[2,selVar], na.rm=TRUE)) / 
+                             sum(!is.na(VO_sdqV[,selVar]),na.rm=TRUE) * 100
+  if(selVar == "sdq_prosoc"){
+  VO_disJM[selVar,c(4,8,12)] <- c(sum(VO_sdqV[,selVar] >= JM_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdqV[,selVar] >= JM_cut[2,selVar] & 
+                                   VO_sdqV[,selVar] < JM_cut[1,selVar], na.rm=TRUE),
+                             sum(VO_sdqV[,selVar] < JM_cut[2,selVar], na.rm=TRUE)) / 
+                             sum(!is.na(VO_sdqV[,selVar]),na.rm=TRUE) * 100
+  }
+    
+}
+
+cutt <-
+  rbind(JMa=NA,JM_dis,JGZa=NA,VO_dis,JGZ_disa=NA,VO_disJM)
+
+cutt <- cbind(cutt[,1:4],LEEG1=NA,cutt[,5:8],LEEG2=NA,cutt[,9:12])
+
+cutt_tabx <- xtable(cutt,digits=0,caption="cutt")
+
+# align(cutt_tabx) <- rep("l",15)
+align(cutt_tabx) <- c("l","X","l","l","l","l","X","l","l","l","l","X","l","l","l")
+
+
+clean_row <- function(y){
+  y <- gsub2(c("JMa","JGZa","JGZ_disa"),
+             c("AAA","BBB","CCC"),y)
+  y <- gsub("\\d",replacement="",y)
+  y <- gsub2(c("sdq_emotion","sdq_conduct","sdq_hyper","sdq_peer","sdq_prosoc","sdq_tot"),
+             paste("\\\\enspace",
+             c("Emotional symptoms","Conduct problems","Hyperactivity",
+               "Peer problems","Prosocial behaviour","Total difficulties score")),y)
+  paste(y)
+}
+
+clean_col <- function(x){
+ paste("XXXXXXXXXXXXXXXXXXX")
+}
+
+
+
+cutt_capture <-
+  capture.output(
+    print(cutt_tabx,include.rownames=TRUE,caption.placement="top",booktabs=TRUE,
+          tabular.environment="tabularx",width="\\textwidth",latex.environments="flushleft",
+          NA.string=c(""),table.placement=placement,floating.environment="sidewaystable",
+          sanitize.colnames.function = function(x) clean_col(x),
+          sanitize.rownames.function = function(y) clean_row(y)
+          )
+    )
+
+cutt_capture <-
+  gsub2(c("AAA &","BBB &","CCC &"),
+        paste("\\\\multicolumn{15}{l}{",
+              c("School setting (anonymous)","PYHC setting (non-anonymous)",
+                "PYHC setting (non-anonymous) using school setting cut-off scores"),
+              "}",sep=""),
+        cutt_capture)
+
+cutt_capture <-
+  gsub(" & XXXXXXXXXXXXXXXXXXX \\\\",
+       " & \\\\multicolumn{4}{c}{Normal: 0-80 percentile} & & \\\\multicolumn{4}{c}{Borderline: 80-90 percentile} & & \\\\multicolumn{4}{c}{Abnormal: \\\\textgreater90 percentile} \\\\\\\\  
+         \\\\cmidrule{2-5} \\\\cmidrule{7-10} \\\\cmidrule{12-15} 
+        & Cut-off & T\\\\% & B\\\\% & G\\\\% & & Cut-off & T\\\\% & B\\\\% & G\\\\% & & Cut-off & T\\\\% & B\\\\% & G\\\\% \\\\",
+       cutt_capture)
+
+cutt_capture <-
+  gsub(" &  &  &  &  &  &  &  &  &  &  &  &  & "," ",cutt_capture)
+
+cutt_capture <-
+  gsub("\\end{tabularx}",
+       "\\end{tabularx}  T = Total, B = Boys, G = Girls, PYHC = Preventive Youth Health Care.",cutt_capture,fixed=TRUE)
+@
+
+<<prep Regression, eval=TRUE, include=FALSE>>=
+sdq_JM <- 
+  data.frame(DataJM[,c("sdq_emotion","sdq_conduct","sdq_hyper","sdq_peer","sdq_prosoc","sdq_tot","gender",
+                       #ADDED VARIABLES
+                       "EBEGK301",
+                       "LBRAK302"
+                       )],
+             G="JM")
+
+colnames(sdq_JM) <- 
+  c("sdq_emotion","sdq_conduct","sdq_hyper","sdq_peer","sdq_prosoc","sdq_tot","gender",
+    #ADDED VARIABLES
+    "perc_health","smoking_now",
+    "G")
+
+# VO <- rbind.fill(DataTOT$DataVO[(length(DataTOT$DataVO)-2):length(DataTOT$DataVO)])
+sdq_VO <- data.frame(VO[,c("sdq_emotion","sdq_conduct","sdq_hyper","sdq_peer","sdq_prosoc","sdq_tot","gender",
+                           #ADDED VARIABLES
+                           "perc_health",
+                           "smoking_now"
+                           )],
+                     G="JGZ")
+
+data_reg <- rbind(sdq_JM,sdq_VO)
+data_reg$perc_health <- Recode(data_reg$perc_health, "'1' =0;'2' =0;'3' =1;'4' =1;'5' =1;
+                                              'a5'=0;'a4'=0;'a3'=1;'a2'=1;'a1'=1;
+                                              else=NA")
+
+data_reg$smoking_now <- Recode(data_reg$smoking_now, "'Ik rook niet'=0;'A'=0;NA=NA;else=1")
+
+reg_health <- glm(perc_health ~ sdq_tot * factor(G),data=data_reg,family=binomial())
+reg_healthJGZ <- glm(perc_health ~ sdq_tot , data=subset(data_reg, G == "JGZ"),family=binomial())
+reg_healthJM  <- glm(perc_health ~ sdq_tot , data=subset(data_reg, G == "JM"), family=binomial())
+
+reg_smok   <- glm(smoking_now ~ sdq_tot * factor(G),data=data_reg,family=binomial())
+reg_smokJGZ <- glm(smoking_now ~ sdq_tot , data=subset(data_reg, G == "JGZ"),family=binomial())
+reg_smokJM  <- glm(smoking_now ~ sdq_tot , data=subset(data_reg, G == "JM"), family=binomial())
+# 
+# NICO <- glm(smoking_now ~sdq_tot ,data=sdq_JM,family=binomial())
+# summary(NICO)
+# exp(coef(NICO))
+# exp(confint(NICO))
+# 
+# NICO <- glm(smoking_now ~ sdq_tot ,data=subset(HENK,G=="JGZ"),family=binomial())
+# summary(NICO)
+# exp(confint(NICO))
+
+# dif_JM <- 
+#   data.frame( DataJM[,c(str_detect(string=colnames(DataJM),
+#                                     pattern=paste("consid","restles","somatic","shares","tantrum",
+#                                                   "loner","obeys","worries","caring","fidgety",
+#                                                   "friend","fights","unhappy","popular","distrac",
+#                                                   "clingy","kind","lies","bullied","helpout",
+#                                                   "reflect","steals","oldbest","afraid","attends",
+#                                                   sep="|")))],G="JM")
+# 
+# dif_JGZ <- 
+#   data.frame( VO[,c(str_detect(string=colnames(VO),
+#                                     pattern=paste("consid","restles","somatic","shares","tantrum",
+#                                                   "loner","obeys","worries","caring","fidgety",
+#                                                   "friend","fights","unhappy","popular","distrac",
+#                                                   "clingy","kind","lies","bullied","helpout",
+#                                                   "reflect","steals","oldbest","afraid","attends",
+#                                                   sep="|")))],G="JGZ")
+# colnames(DIF_data)
+# DIF_data <- rbind(dif_JM,dif_JGZ)
+# 
+# #PRO
+# lordif(DIF_data[,c("sconsid", "sshares", "scaring", "skind", "shelpout")],DIF_data[,"G"],alpha=.01/5,criterion="Beta")
+# #EMOTION
+# lordif(DIF_data[,c("ssomatic", "sworries", "sunhappy", "sclingy", "safraid")],DIF_data[,"G"],alpha=.01/5,criterion="Beta")
+# #CONDUCT
+# lordif(DIF_data[,c("stantrum", "robeys", "sfights", "slies","sbullied")],DIF_data[,"G"],alpha=.01/5,criterion="Beta")
+# lordif(DIF_data[,c("sconsid", "sshares", "scaring", "skind", "shelpout")],DIF_data[,"G"])
+# lordif(DIF_data[,c("sconsid", "sshares", "scaring", "skind", "shelpout")],DIF_data[,"G"])
+# 
+# 
+#  data(Anxiety)
+#  resp.data <- Anxiety[paste("R",1:29,sep="")]
+#   resp.data2 <- DIF_data[,c("ssomatic", "sworries", "sunhappy", "sclingy", "safraid")]
+# 
+# resp.data2$ssomatic <- as.integer(resp.data2$ssomatic)
+# resp.data2$sworries <- as.integer(resp.data2$sworries)
+# resp.data2$sunhappy <- as.integer(resp.data2$sunhappy)
+# resp.data2$sclingy <- as.integer(resp.data2$sclingy)
+# resp.data2$safraid <- as.integer(resp.data2$safraid)
+# 
+# 
+# 
+#  age <- Anxiety$age
+# age2 <- as.integer(as.numeric(as.factor(DIF_data[,"G"])))
+# age.DIF <- lordif(resp.data2,age2,control=list(iter.qN=100,GHk=61,method="SANN"))
+#  print(age.DIF)
+
+@
+
+<<prep CFA, include=FALSE, cache=TRUE>>=
+# # JGZ CFA
+VO <- rbind.fill(DataTOT$DataVO[(length(DataTOT$DataVO)-2):length(DataTOT$DataVO)])
+VO_emo <- VO[,c("ssomatic","sworries","sunhappy","sclingy" ,"safraid" ,"gender")]
+VO_con <- VO[,c("stantrum","robeys"  ,"sfights" ,"slies"   ,"ssteals" ,"gender")]
+VO_hyp <- VO[,c("srestles","sfidgety","sdistrac","rreflect","rattends","gender")]
+VO_soc <- VO[,c("sloner"  ,"rfriend" ,"rpopular","sbullied","soldbest","gender")]
+VO_pro <- VO[,c("sconsid" ,"sshares" ,"scaring" ,"skind"   ,"shelpout","gender")]
+VO_tot <- cbind(VO_emo[,1:5],VO_con[,1:5],VO_hyp[,1:5],VO_soc[,1:5],VO_pro)
+
+VO_tot$gender <- Recode(VO_tot$gender, "'M'=0;'V'=1")
+VO_tot$group  <- 1
+VO_tot$gr_ge  <- VO_tot$gender
+
+# # JM CFA
+JM <- DataJM
+JM_emo <- JM[,c("ssomatic","sworries","sunhappy","sclingy" ,"safraid" ,"gender")]
+JM_con <- JM[,c("stantrum","robeys"  ,"sfights" ,"slies"   ,"ssteals" ,"gender")]
+JM_hyp <- JM[,c("srestles","sfidgety","sdistrac","rreflect","rattends","gender")]
+JM_soc <- JM[,c("sloner"  ,"rfriend" ,"rpopular","sbullied","soldbest","gender")]
+JM_pro <- JM[,c("sconsid" ,"sshares" ,"scaring" ,"skind"   ,"shelpout","gender")]
+JM_tot <- cbind(JM_emo[,1:5],JM_con[,1:5],JM_hyp[,1:5],JM_soc[,1:5],JM_pro)
+
+JM_tot$gender <- Recode(JM_tot$gender, "'M'=0;'V'=1")
+JM_tot$group  <- 2
+JM_tot$gr_ge  <- JM_tot$gender + 2
+
+# # Combine
+JMVO_tot <- rbind(JM_tot,VO_tot)
+prepareMplusData(df=JMVO_tot, filename=paste(wd,"/ArtikelSelfReport/Mplus/mplus_jmvo.dat",sep=""), keepCols=colnames(JMVO_tot))
+
+# runModels(recursive=TRUE, replaceOutfile="modifiedDate")
+
+CFA_sum <- extractModelSummaries(target=paste(wd,"/ArtikelSelfReport/Mplus",sep=""),recursive=TRUE)
+
+CFA_tab <- CFA_sum[,c("Filename",
+                      "ChiSqM_Value","ChiSqM_DF","ChiSqM_PValue","CFI","RMSEA_Estimate",
+                      "ChiSqDiffTest_Value","ChiSqDiffTest_DF","ChiSqDiffTest_PValue")]
+
+# CFA_tab <- CFA_tab[!str_detect(CFA_tab$Filename, "five"),]
+
+CFA_tabX <- rbind.data.frame(NA,
+                             CFA_tab[str_detect(CFA_tab$Filename, "jgz_male.out"),],
+                             CFA_tab[str_detect(CFA_tab$Filename, "jgz_female.out"),],
+                             CFA_tab[str_detect(CFA_tab$Filename, "jgz_m1.out"),],
+                             CFA_tab[str_detect(CFA_tab$Filename, "jgz_m2.out"),],
+                             CFA_tab[str_detect(CFA_tab$Filename, "jgz_m3.out"),],
+                             NA,
+                             CFA_tab[str_detect(CFA_tab$Filename, "jm_male.out"),],
+                             CFA_tab[str_detect(CFA_tab$Filename, "jm_female.out"),],
+                             CFA_tab[str_detect(CFA_tab$Filename, "jm_m1.out"),],
+                             CFA_tab[str_detect(CFA_tab$Filename, "jm_m2.out"),],
+                             CFA_tab[str_detect(CFA_tab$Filename, "jm_m3.out"),],
+                             NA,
+                             CFA_tab[str_detect(CFA_tab$Filename, "com_m1.out"),],
+                             CFA_tab[str_detect(CFA_tab$Filename, "com_m2.out"),],
+                             CFA_tab[str_detect(CFA_tab$Filename, "com_m3.out"),]
+                             )
+
+CFA_tabX <-
+  cbind.data.frame(Filename=CFA_tabX[,1], CHI=NA, CFA_tabX[,2:6], 
+                   Comp=NA, dCFI=NA, dCHI=NA, CFA_tabX[,7:9])
+
+CFA_tabX[,"Filename"] <- as.character(CFA_tabX[,"Filename"])
+CFA_tabX[c(1,7,13),"Filename"] <- c("JGZ","JM","COMP")
+
+CFA_tabX[,"Comp"] <- c(rep(NA,4),"vs. 1","vs. 2",
+                       rep(NA,4),"vs. 1","vs. 2",
+                       rep(NA,2),"vs. 1","vs. 2")
+
+CFA_tabX[,"dCFI"] <- c(rep(NA,4),
+                       abs(CFA_tabX[which(CFA_tabX$Filename=="jgz_m2.out"),"CFI"] - CFA_tabX[which(CFA_tabX$Filename=="jgz_m1.out"),"CFI"]),
+                       abs(CFA_tabX[which(CFA_tabX$Filename=="jgz_m3.out"),"CFI"] - CFA_tabX[which(CFA_tabX$Filename=="jgz_m2.out"),"CFI"]),
+                       rep(NA,4),
+                       abs(CFA_tabX[which(CFA_tabX$Filename=="jm_m2.out"),"CFI"] - CFA_tabX[which(CFA_tabX$Filename=="jm_m1.out"),"CFI"]),
+                       abs(CFA_tabX[which(CFA_tabX$Filename=="jm_m3.out"),"CFI"] - CFA_tabX[which(CFA_tabX$Filename=="jm_m2.out"),"CFI"]),
+                       rep(NA,2),
+                       abs(CFA_tabX[which(CFA_tabX$Filename=="com_m2.out"),"CFI"] - CFA_tabX[which(CFA_tabX$Filename=="com_m1.out"),"CFI"]),
+                       abs(CFA_tabX[which(CFA_tabX$Filename=="com_m3.out"),"CFI"] - CFA_tabX[which(CFA_tabX$Filename=="com_m2.out"),"CFI"])
+                       )
+                       
+for(i in 1:nrow(CFA_tabX)){
+  if(!is.na(CFA_tabX$ChiSqDiffTest_Value[i])){
+    CFA_tabX[i,"dCHI"] <-
+      paste(sprintf("%.2f",CFA_tabX$ChiSqDiffTest_Value[i])," (",
+            sprintf("%.0f",CFA_tabX$ChiSqDiffTest_DF[i]),")",
+            if(CFA_tabX$ChiSqDiffTest_PValue[i]<.05) "*" else "" ,sep="")
+  }
+  if(!is.na(CFA_tabX$ChiSqM_Value[i])){
+    CFA_tabX[i,"CHI"] <-
+      paste(sprintf("%.2f",CFA_tabX$ChiSqM_Value[i])," (",
+            sprintf("%.0f",CFA_tabX$ChiSqM_DF[i]),")",
+            if(CFA_tabX$ChiSqM_PValue[i]<.05) "*" else "" ,sep="")
+  }
+}
+
+XX <- "..."
+XXX <- ".." 
+split_CHI    <- strsplit(sub("[.]\\s*", XX, CFA_tabX$CHI), XXX,fixed=TRUE)
+split_dCHI   <- strsplit(sub("[.]\\s*", XX, CFA_tabX$dCHI), XXX,fixed=TRUE)
+# split_Effect <- strsplit(sub("[.]\\s*", XX, HUUB$Effect), XXX,fixed=TRUE)
+
+rowN <- CFA_tabX[,"Filename"]
+CFA_prepX <- data.frame(CHI_1=unlist(lapply(split_CHI, function(x) x[[1]])),
+                        CHI_2=unlist(lapply(split_CHI, function(x) if(length(x) == 2) x[[2]] else NA)),
+                        CFI=paste(gsub(pattern="0.",
+                                       replacement=".",
+                                       x=sprintf("%.2f",CFA_tabX$CFI),fixed=TRUE)), 
+                        RMSEA=paste(gsub(pattern="0.",
+                                         replacement=".",
+                                         x=sprintf("%.2f",CFA_tabX$RMSEA_Estimate),fixed=TRUE)), 
+                        LEEG1=NA, Comp=CFA_tabX$Comp,
+                        dCHI_1=unlist(lapply(split_dCHI, function(x) x[[1]])),
+                        dCHI_2=unlist(lapply(split_dCHI, function(x) if(length(x) == 2) x[[2]] else NA)),
+                        dCFI=paste(gsub(pattern="0.",
+                                         replacement=".",
+                                         x=sprintf("%.2f",CFA_tabX$dCFI),fixed=TRUE)))
+
+CFA_prepX[CFA_prepX=="NA"] <- ""
+
+rownames(CFA_prepX) <- as.character(rowN)
+
+CFA_prepX <- xtable(CFA_prepX,caption="HUUB")
+
+align(CFA_prepX) <- c("l","r@{","}l","l","l","l","l","r@{","}l","l")
+
+clean_col <- function(x){
+ paste("XXXXXXXXXXXXXXXXXXX")
+}
+
+clean_row <- function(y){
+  y <- gsub2(rowN,
+             c("JGZ","\\\\enspace Male","\\\\enspace Female",
+               "\\\\enspace Model 1 (all parameters free)","\\\\enspace Model 2 (constrained factor loadings)",
+               "\\\\enspace Model 3 (+constrained thresholds)",
+               "JM","\\\\enspace Male","\\\\enspace Female",
+               "\\\\enspace Model 1 (all parameters free)","\\\\enspace Model 2 (constrained factor loadings)",
+               "\\\\enspace Model 3 (+constrained thresholds)",
+               "Combined",
+               "\\\\enspace Model 1 (all parameters free)","\\\\enspace Model 2 (constrained factor loadings)",
+               "\\\\enspace Model 3 (+constrained thresholds)"),
+             y)
+  paste(y)
+}
+
+CFA_capture <-
+  capture.output(
+    print(CFA_prepX,include.rownames=TRUE,caption.placement="top",booktabs=TRUE,
+          tabular.environment="tabularx",width="\\textwidth",latex.environments="flushleft",
+          NA.string=c(""),
+          table.placement=placement,floating.environment="sidewaystable",
+          sanitize.colnames.function = function(x) clean_col(x),
+          sanitize.rownames.function = function(y) clean_row(y)
+          )
+    )
+
+CFA_capture <-
+  gsub(" & XXXXXXXXXXXXXXXXXXX \\\\",
+       " Model & \\\\multicolumn{4}{l}{Model Fit Indices} & & \\\\multicolumn{4}{l}{Nested Model Comparisons} \\\\\\\\  
+         \\\\cmidrule{2-5} \\\\cmidrule{7-10}  
+         & & \\\\multicolumn{1}{X}{\\\\textchi} & \\\\multicolumn{1}{X}{CFI} & \\\\multicolumn{1}{X}{RMSEA} & & \\\\multicolumn{1}{X}{Comp} & & \\\\multicolumn{1}{X}{\\\\textDelta\\\\textchi} & \\\\multicolumn{1}{X}{\\\\textDelta{CFI}} \\\\",
+       CFA_capture)
+
+CFA_capture <-
+  gsub("\\end{tabularx}",
+       "\\end{tabularx} PYHC = Preventive Youth Health Care.",CFA_capture,fixed=TRUE)
+
+# # In text baseline model
+in_text.CFA_base <- CFA_sum[CFA_sum$Filename=="com_five.out",c("ChiSqM_Value","ChiSqM_DF","ChiSqM_PValue",
+                                                               "RMSEA_Estimate","CFI")]
+
+five.intext <- SEMsum_intext(CFA_tab[str_detect(CFA_tab$Filename, "com_five.out"),])
+fivepos.intext <- SEMsum_intext(CFA_tab[str_detect(CFA_tab$Filename, "com_fivepos.out"),])
+fivepos_dif_five.intext <- SEMdif_intext(x=CFA_tab[str_detect(CFA_tab$Filename, "com_five.out"),],y=CFA_tab[str_detect(CFA_tab$Filename, "com_fivepos.out"),])
+
+@
+
+<<prep histogram, include=FALSE, cache=TRUE>>=
+sdq_JM <- data.frame( DataJM[,c("sdq_emotion","sdq_conduct","sdq_hyper","sdq_peer","sdq_prosoc","sdq_tot")],G=1)
+sdq_VO <- data.frame(     VO[,c("sdq_emotion","sdq_conduct","sdq_hyper","sdq_peer","sdq_prosoc","sdq_tot")],G=2)
+
+sdq_VOJM <- rbind(sdq_JM,sdq_VO)
+
+sdq_VOJM <- melt(sdq_VOJM[,c("sdq_emotion","sdq_conduct","sdq_hyper","sdq_peer","sdq_prosoc","sdq_tot","G")],id.vars="G")
+
+SDQtot_hist <- subset(sdq_VOJM, variable == "sdq_tot")
+
+SDQtot_hist_gg <- rbind(
+  data.frame(
+    merge(x=data.frame(Var1=0:30),
+          y=data.frame(table(subset(SDQtot_hist,G==1)$value)/sum(table(subset(SDQtot_hist,G==1)$value))),
+          all.x=TRUE),
+    G="School"),
+  data.frame(
+    merge(x=data.frame(Var1=0:30),
+          y=data.frame(table(subset(SDQtot_hist,G==2)$value)/sum(table(subset(SDQtot_hist,G==2)$value))),
+          all.x=TRUE),
+    G="PHYC"))
+  
+# data.frame(table(subset(SDQtot_hist,G==2)$value)/sum(table(subset(SDQtot_hist,G==2)$value)),G=2))
+
+hist.sdq_tot <-
+  ggplot(SDQtot_hist_gg, aes(x=Var1, y=Freq, fill=as.factor(G))) +
+    geom_bar(position="dodge",stat="identity") + 
+    scale_y_continuous(limits=c(0,0.1), expand=c(0,0), 
+                       breaks=c(0,.025,.05,0.075,0.1), 
+                       labels=c(0,2.5,5,7.5,10),
+                       name="Percentage (%)") +
+    scale_x_continuous(limits=c(-.5,30.5), 
+                       breaks=c(0,5,10,15,20,25,30),
+                       name="SDQ total difficulties score") +
+    scale_fill_grey(name="Setting") +
+    theme_bw(15)
+@
+
+\usepackage{longtable}
+\usepackage{rotating}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage[usenames,dvipsnames,table]{xcolor}
+\usepackage{tabularx}
+\usepackage{ragged2e}
+\usepackage{siunitx}
+\usepackage{lipsum}
+\usepackage{textgreek}
+
+%References
+\usepackage{natbib}
+
+%Outline columns
+\newcolumntype{C}{>{\Centering}X}
+\newcolumntype{L}{>{\flushleft}l}
+
+\usepackage{ulem}
+\usepackage{pifont}
+
+\usepackage{enumitem}
+\setdescription{leftmargin=\parindent,labelindent=\parindent}
+
+\title{The context dependency of the self-report version of the SDQ}
+
+\begin{document}
+\maketitle
+
+\section{Miscellaneous}
+\subsection{Main questions}
+The main question of this article therefore is:
+\begin{itemize}
+  \item Is context dependency (PYHC vs. classroom administered) present for the self-report version of the SDQ?
+\end{itemize}
+This main question can be divided into several sub-questions:
+\begin{itemize}
+  \item Does this context dependency results into measurement variance between the two settings?
+  \item What is the influence of the context dependency on the difference between the average scores of the two settings?
+  \item If there is indeed context dependency that leads to a different underlying distribution of the SDQ-scores, how does this influence the validity of transferring cut-off points between setting. 
+\end{itemize}
+
+\subsection{Over- en afwegingen}
+\begin{description}
+  \item[\ding{55}] \sout{Include regression and compare it between the two settings.} Difficult to find a suitable common denominator for both settings that can be reliably compared. Also the focus of the questionnaires of the two settings differs which leads to different outcome variables. Furthermore, a golden standard is missing making it difficult to make solid conclusions, which could lead to drifting away the attention from the main goal of the paper (comparing settings) to ''validation'' part of the paper. [30-01-2014]
+  \item[\ding{55}] \sout{Perform different subgroups analysis.} Again, the different focus of the questionnaires of the two settings makes it difficult to find some common denominator to compare the groups. SES is for example better captured in the school questionaire, while medical care and history is better covered in the PYHC setting. Therefore, the only subgroup analysis that is possible is an analysis regarding the differences in gender (which goes in the expected direction for both settings, without to much differences regarding effect sizes for gender between the two settings[except for the emotional and total scale]). [30-01-2014]
+  \item[\ding{55}] \sout{Make a comparison between different school levels.} For the PYHC data the information regarding which level the students attain is not reliable and impossible to disentangle. [06-02-2014]
+  \item[\ding{51}] \textbf{Compare the obtained cut-off scores with the advised, regular, cut-off scores} Why? I don't know[06-02-2014]
+  \item[\ding{51}] \textbf{Focus on the the different settings, not only anonymous vs. non-anonymous} Important to also pay attention on other factors that differ between the different groups (informed consent, guided letter, time window, follow-up) [06-02-2014]
+\end{description}
+
+\subsection{Losse Flodders}
+\begin{itemize}
+  \item The instrument has been implemented in different areas of interest, such as developmental and clinical research, but also
+  \item also in the pursuit of comparing scores across nations
+  \item Difference between informants (more pronounced in adolescents)
+  \item SDQ not that ''heavy''
+  \item Not only measurement invariance but also relations between constructs
+  \item Besides the anonymous vs. non-anonymous of Mielo there are of course also other differences betwee nthe settings.
+\end{itemize}
+
+\section{Introduction}
+The Strength and Difficulties Questionnaire (SDQ) is a questionnaire developed to screen psychological adjustment in children and adolescents. It is comprised of 25 items, covering five distinct, albeit related, constructs (i.e., emotional symptoms, conduct problems, hyperactivityâ€“inattention, peer problems, and pro-social behavior). A total difficulties score can also be recovered, combining the four subscales covering the childâ€™s emotional and behavioral functioning -- thus, excluding the prosaically behavior scale. The widespread use of the SDQ in child mental health research is attributed to several characteristics, such as its user friendliness, briefness (25 items), inclusion of positive attributes items, and the availability of different formats for different informants (e.g. teacher, parent, youth). Furthermore its psychometric properties are satisfying, as the total difficulties score has proved to be a reliable score . 
+
+\subsection{Settings}
+Due to it positive properties it serves a widespread range of areas in child mental health research, including developmental and clinical research, The KIDSCREEN project and the HBSC study, for example, use the SDQ  to compare the mental health of children between countries. Another branch of research focus on the relationship between the SDQ and psycho-social problems. As these studies show a strong relationship with a golden standard, such as the CBCL, and DSM-IV evaluated XXX, the SDQ is also frequently used in nation-wide screening programs from preventive health care centers (PHYC). The usage of instruments as the SDQ in such programs is especially important as research shows that without validated questionnaires a substantial amount of children having emotional or behavioral problems are not identified as such. The SDQ can provide an objective indication of possible psycho-social problems of a child, without imposing too much distress as it is a relative short questionnaire. Combining this indication with the clinical eye of the health professional and other assessments can increase the accuracy of the XXX. 
+
+\subsection{Mean scores}
+Although the study of the SDQ often translates results from one area of interest to another, it has never been studies whether such translations are indeed valid. The aspect that is most likely to violate a valid comparison is the setting in which this research is conducted. Mielo et al., for example notice in their discussion that the ''...sample was compiled in the [PYHC]; therefore, the questionnaires (as filled out by parents and teachers) were used in the [PYHC] system and were not anonymous. (p.7)''. It could be argued that in such a non-anonymous setting the informant is prone to answer social desirable, in order to remain of the radar. 
+
+\subsection{Cut-off}
+Besides the possible hampered comparison of means scores between (cross-national) samples, the usage of cut-off points could also be erroneous if it is based on a sample which had a different setting. The use of cut-off scores is already debatable as many studies deviate from the original cut-off points, formulated by Goodman, as these seem to strict. Most studies therefore use the 90th and 80th percentile from their own sample making comparisons between studies regarding prevalence of ''high'' scores impossible as they are all around 10\% by definition. The scores could be valid, however, for the internal validation of the relation between the SDQ and different outcomes. It is nevertheless still doubtful whether these cut-off points are also legitimately transferable between settings--such as using cut-off scores in clinical practice based on cut-off scores from an anonymous setting, even within the same population. Since in the current XXX cut-off are based they suffer therefore from the same as mean scores do. And although it is possible that cut-off points are a bit more robust for the difference between settings than mean scores are, it is unlikely that an effect is.
+
+\subsection{Structure}
+An important aspect of comparability between groups is measurement invariance. That is, differences, or the absence of them, between groups are solely due to the actual difference between the groups and are not an artifact of a differential functioning of the instrument between the groups. Before any conclusions can be made at all regarding the comparability of SDQ scores across different settings it is thus important to underlying structure. The structure of an instrument, and the invariance between groups, is most often analyzed with confirmatory factor analysis. 
+
+\subsection{Social desirability}
+
+\section{Methods}
+To analyze the effect of the setting in which the SDQ is administered, two samples were included in the current study. The first sample consisted of questionnaires used in PYHC center's as a screening instrument, which were therefore non-anonymous. The second sample consisted of questionnaires administered anonymously at school classes facilitating an quinquennial report regarding the mental and physical health of adolescents. 
+
+\subsection{PYHC}
+For the current study data from the PYHC from the southern part of Limburg (the Netherlands) was used. One of the core tasks of all PYHC's in the Netherlands to provide routinely assessment for all children in their region. These assessments start at birth and continue until the child is in the second grade of secondary school, and include 14 assessments in total. During these assessments the physical and psycho-social health of the child is assessed by a specially trained nurse or doctor (depending on the assessment). In this study information from the, last, assessment is used. This assessment takes place during the second grade of secondary school when children are approximately 14 to 15 years old. During this assessment circa 90\% of the eligible children are present.
+
+To increase the effectiveness of the assessment during the secondary school the child is asked to fill in a questionnaire. This questionnaires covers a range of topics appropriate for the current developmental stage of the child (eg. Smoking behavior). These questionnaire are eventually scanned and converted to a database which will be used in this study. The response rate for the questionnaire during the assessment is approximately 90\%. Therefore, by combining this response rate with the above mentioned coverage of the YHCC, information of around 80\% of the eligible children is present for this cohort. 
+
+To avoid that children were present in multiple cohorts, only the three most recent years of data gathering was included. This resulted in the inclusion of the years \Sexpr{gsub2(from_years,years_text,names(DataTOT$DataBO)[length(DataTOT$DataBO)-2])}, \Sexpr{gsub2(from_years,years_text,names(DataTOT$DataBO)[length(DataTOT$DataBO)-1])}, and \Sexpr{gsub2(from_years,years_text,names(DataTOT$DataBO)[length(DataTOT$DataBO)-0])}. The total number of available questionnaires for is \Sexpr{nrow(VO)}.
+
+The mean age of the children was \Sexpr{mean(VO$age,na.rm=T)} years (SD = \Sexpr{sd(VO$age,na.rm=T)} years).
+
+\subsection{School}
+In order to make valid comparisons between the two settings, the same area was used for selecting the anonymous data. This data is used for national comparisons between regions, analyzing trends over time, and to give a global impression, regarding the mental and physical health of adolescents. 
+
+\section{Results}
+The original model \Sexpr{five.intext}, including the positive model increased the fit significantly \Sexpr{fivepos_dif_five.intext}, resulting in an overall good fit \Sexpr{fivepos.intext}. \citep{Roy_2008_SDQstructureAdolescent}.
+
+\section{Discussion}
+
+\bibliographystyle{apalike}
+\bibliography{Huub}
+
+\clearpage
+<<background_xtab, results='asis', echo=FALSE>>=
+cat(background_capture,sep="\n")
+@
+
+\clearpage
+<<compU_xtab, results='asis', echo=FALSE>>=
+cat(compU_capture,sep="\n")
+@
+\clearpage
+<<compA_xtab, results='asis', echo=FALSE>>=
+cat(compA_capture,sep="\n")
+@
+\clearpage
+<<CFA_xtab, results='asis', echo=FALSE>>=
+cat(CFA_capture,sep="\n")
+@
+\clearpage
+<<Cutoff_xtab, results='asis', echo=FALSE>>=
+cat(cutt_capture,sep="\n")
+@
+\clearpage
+<<sdqTot_ggplot, echo=FALSE, fig.height=4>>=
+hist.sdq_tot
+@
+\clearpage
+<<reg_prel, echo=TRUE, include=FALSE>>=
+# # Total Perceived Health
+cbind(summary(reg_health)$coefficients,
+      lCI=exp(confint(reg_health))[,1],
+      OR =exp(reg_health$coefficients),
+      rCI=exp(confint(reg_health))[,2])
+
+# # PYHC Perceived Health
+cbind(summary(reg_healthJGZ)$coefficients,
+      lCI=exp(confint(reg_healthJGZ))[,1],
+      OR =exp(reg_healthJGZ$coefficients),
+      rCI=exp(confint(reg_healthJGZ))[,2])
+
+# # School Perceived Health
+cbind(summary(reg_healthJM)$coefficients,
+      lCI=exp(confint(reg_healthJM))[,1],
+      OR =exp(reg_healthJM$coefficients),
+      rCI=exp(confint(reg_healthJM))[,2])
+
+# # Total Smoking
+cbind(summary(reg_smok)$coefficients,
+      lCI=exp(confint(reg_smok))[,1],
+      OR =exp(reg_smokJM$coefficients),
+      rCI=exp(confint(reg_smok))[,2])
+
+# # PYHC Smoking
+cbind(summary(reg_smokJGZ)$coefficients,
+      lCI=exp(confint(reg_smokJGZ))[,1],
+      OR =exp(reg_smokJGZ$coefficients),
+      rCI=exp(confint(reg_smokJGZ))[,2])
+
+# # School Smoking
+cbind(summary(reg_smokJM)$coefficients,
+      lCI=exp(confint(reg_smokJM))[,1],
+      OR =exp(reg_smokJM$coefficients),
+      rCI=exp(confint(reg_smokJM))[,2])
+
+@
+\clearpage
+<<sessionInfo, echo=FALSE>>=
+print(sessionInfo(),locale = TRUE)
+cat("\n")
+Sys.time()
+cat("\n")
+cat("GettingThingsR")
+@
+\end{document}
